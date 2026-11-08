@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>ELLIDE</title>
+<meta name="description" content="ELLIDE">
+<meta name="theme-color" content="#0F3640">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 200 200'%3E%3Crect width='200' height='200' fill='%230F3640'/%3E%3Cg fill='%23B7C9CC' transform='translate(44.24 60.6) scale(0.7887)'%3E%3Crect x='12' y='0' width='18' height='100'/%3E%3Crect x='0' y='41' width='60' height='18'/%3E%3Cpath d='M12 0H94.2A47.9 50 0 0 1 94.2 100H12V82H91.1A32.8 32 0 0 0 91.1 18H12Z'/%3E%3C/g%3E%3C/svg%3E">
+<style>
+  :root{
+    --petrol:#0F3640;
+    --mist:#B7C9CC;
+    --mist-dim:rgba(183,201,204,.55);
+  }
+  *{box-sizing:border-box;margin:0;padding:0}
+  html,body{height:100%;background:var(--petrol);color:var(--mist);overflow:hidden;
+    font-family:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;-webkit-font-smoothing:antialiased}
+  canvas#sea{position:fixed;inset:0;width:100%;height:100%;display:block}
+  .vignette{position:fixed;inset:0;pointer-events:none;
+    background:radial-gradient(ellipse 46% 26% at 50% 50%,rgba(15,54,64,.78) 0%,rgba(15,54,64,0) 100%),
+               radial-gradient(ellipse at 50% 45%,rgba(15,54,64,0) 35%,rgba(8,30,36,.55) 100%)}
+  main{position:fixed;inset:0;display:grid;place-items:center;padding:6vw}
+  .mark{width:min(72vw,880px);height:auto;overflow:visible;display:block}
+  .mark g.l{fill:var(--mist);opacity:0;transform:translateY(14px);
+    transition:opacity 1.6s cubic-bezier(.2,.7,.2,1),transform 1.6s cubic-bezier(.2,.7,.2,1);
+    will-change:transform}
+  .mark.in g.l{opacity:1;transform:translateY(0)}
+  .mark g.l.live{transition:none}
+  footer{position:fixed;left:0;right:0;bottom:max(28px,env(safe-area-inset-bottom));
+    display:flex;justify-content:center;align-items:center;gap:1.2em;
+    font-size:13px;letter-spacing:.22em;text-transform:lowercase;opacity:0;
+    transition:opacity 1.8s ease 1.4s}
+  footer.in{opacity:1}
+  footer a{color:var(--mist);text-decoration:none;position:relative;padding:6px 2px;cursor:pointer}
+  footer a::after{content:"";position:absolute;left:0;right:0;bottom:0;height:1px;background:var(--mist);
+    transform:scaleX(0);transform-origin:left;transition:transform .5s cubic-bezier(.2,.7,.2,1)}
+  footer a:hover::after,footer a:focus-visible::after{transform:scaleX(1)}
+  footer a:focus-visible{outline:none}
+  .copied{position:fixed;left:50%;bottom:calc(max(28px,env(safe-area-inset-bottom)) + 34px);transform:translateX(-50%) translateY(6px);
+    font-size:11px;letter-spacing:.3em;color:var(--mist-dim);opacity:0;transition:opacity .4s,transform .4s;pointer-events:none}
+  .copied.show{opacity:1;transform:translateX(-50%) translateY(0)}
+  @media (prefers-reduced-motion:reduce){
+    .mark g.l,footer{transition-duration:.01s}
+  }
+</style>
+</head>
+<body>
+<canvas id="sea" aria-hidden="true"></canvas>
+<div class="vignette" aria-hidden="true"></div>
+
+<main>
+  <svg class="mark" id="mark" viewBox="-20 -20 968 140" role="img" aria-label="ELLIDE">
+    <g class="l"><rect x="0" y="0" width="140" height="18"/><rect x="0" y="41" width="96" height="18"/><rect x="0" y="82" width="140" height="18"/></g>
+    <g class="l"><rect x="196" y="0" width="18" height="100"/><rect x="196" y="82" width="110" height="18"/></g>
+    <g class="l"><rect x="362" y="0" width="18" height="100"/><rect x="362" y="82" width="110" height="18"/></g>
+    <g class="l"><rect x="528" y="0" width="18" height="100"/></g>
+    <g class="l"><rect x="602" y="0" width="18" height="100"/><rect x="590" y="41" width="60" height="18"/><path d="M602 0H684.2A47.9 50 0 0 1 684.2 100H602V82H681.1A32.8 32 0 0 0 681.1 18H602Z"/></g>
+    <g class="l"><rect x="788" y="0" width="140" height="18"/><rect x="788" y="41" width="96" height="18"/><rect x="788" y="82" width="140" height="18"/></g>
+  </svg>
+</main>
+
+<footer id="foot">
+  <a id="mail" href="mailto:hello@ellide.com">hello@ellide.com</a>
+</footer>
+<div class="copied" id="copied">copied</div>
+
+<script>
+(function(){
+  'use strict';
+  var reduce = window.matchMedia && window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+
+  /* ---------- Sea: bathymetric contour field (WebGL) ---------- */
+  var canvas = document.getElementById('sea');
+  var gl = canvas.getContext('webgl', {antialias:false, alpha:false, premultipliedAlpha:false}) ||
+           canvas.getContext('experimental-webgl');
+  var MAXR = 12;
+
+  var vs = 'attribute vec2 p;void main(){gl_Position=vec4(p,0.,1.);}';
+  var fs = [
+  'precision highp float;',
+  'uniform vec2 u_res;uniform float u_t;uniform vec2 u_m;uniform float u_mAct;',
+  'uniform vec3 u_r['+MAXR+'];', // x,y (0..1, aspect-corrected in shader), birth time
+  'float hash(vec2 p){p=fract(p*vec2(123.34,456.21));p+=dot(p,p+45.32);return fract(p.x*p.y);}',
+  'float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.-2.*f);',
+  ' float a=hash(i),b=hash(i+vec2(1,0)),c=hash(i+vec2(0,1)),d=hash(i+vec2(1,1));',
+  ' return mix(mix(a,b,f.x),mix(c,d,f.x),f.y);}',
+  'float fbm(vec2 p){float v=0.,a=.5;mat2 m=mat2(1.6,1.2,-1.2,1.6);',
+  ' for(int i=0;i<5;i++){v+=a*noise(p);p=m*p;a*=.5;}return v;}',
+  'void main(){',
+  ' vec2 uv=gl_FragCoord.xy/u_res; float asp=u_res.x/u_res.y;',
+  ' vec2 p=vec2(uv.x*asp,uv.y);',
+  ' vec2 mp=vec2(u_m.x*asp,u_m.y);',
+  /* slow drift, two layers moving in slightly different directions = current */
+  ' vec2 q=p*1.9+vec2(u_t*.012,-u_t*.008);',
+  /* cursor lens: gently bends the field toward the pointer */
+  ' vec2 dm=p-mp; float md=length(dm);',
+  ' float lens=u_mAct*exp(-md*md*7.)*.09;',
+  ' q+=normalize(dm+1e-5)*lens;',
+  /* ripples: expanding rings that displace the field */
+  ' for(int i=0;i<'+MAXR+';i++){vec3 r=u_r[i]; if(r.z<0.)continue; float age=u_t-r.z; if(age>6.)continue;',
+  '  vec2 rp=vec2(r.x*asp,r.y); vec2 dr=p-rp; float d=length(dr);',
+  '  float front=age*.22; float w=exp(-pow((d-front)*9.,2.))*exp(-age*.55);',
+  '  q+=normalize(dr+1e-5)*w*.075*sin(d*28.-age*5.);}',
+  ' float n=fbm(q)+.18*fbm(q*3.1+7.3);',
+  /* depth shading: deeper toward the bottom and in the "basins" */
+  ' float depth=n*.6+(1.-uv.y)*.25;',
+  ' vec3 petrol=vec3(15.,54.,64.)/255.; vec3 deep=vec3(8.,32.,39.)/255.;',
+  ' vec3 col=mix(petrol,deep,smoothstep(.25,.95,depth));',
+  /* contour lines */
+  ' float k=14.; float f=fract(n*k); float dist=min(f,1.-f);',
+  ' float fw=fwidth(n*k)*1.1;',
+  ' float line=1.-smoothstep(0.,fw*1.6,dist);',
+  /* every 4th contour is an index line, slightly stronger */
+  ' float idx=step(.75,fract(floor(n*k)/4.));',
+  ' float strength=mix(.075,.16,idx);',
+  /* lines brighten near the pointer and near ripple fronts */
+  ' float glow=u_mAct*exp(-md*md*9.)*.45;',
+  ' vec3 mist=vec3(183.,201.,204.)/255.;',
+  ' col=mix(col,mist,line*(strength+glow));',
+  /* faint surface caustic shimmer */
+  ' float sh=noise(p*40.+vec2(u_t*.4,u_t*.25))*noise(p*23.-vec2(u_t*.3));',
+  ' col+=mist*sh*.012;',
+  /* dither to kill banding */
+  ' col+= (hash(gl_FragCoord.xy+fract(u_t))-.5)/255.;',
+  ' gl_FragColor=vec4(col,1.);}'
+  ].join('\n');
+
+  function compile(type,src){var s=gl.createShader(type);gl.shaderSource(s,src);gl.compileShader(s);
+    if(!gl.getShaderParameter(s,gl.COMPILE_STATUS)){throw new Error(gl.getShaderInfoLog(s));}return s;}
+
+  var ok=false, prog, uRes,uT,uM,uMAct,uR, ripples=[], rIdx=0;
+  var mouse={x:.5,y:.5,tx:.5,ty:.5,act:0,tact:0};
+
+  if(gl){
+    try{
+      gl.getExtension('OES_standard_derivatives');
+      var fsrc = '#extension GL_OES_standard_derivatives : enable\n'+fs;
+      prog=gl.createProgram();
+      gl.attachShader(prog,compile(gl.VERTEX_SHADER,vs));
+      gl.attachShader(prog,compile(gl.FRAGMENT_SHADER,fsrc));
+      gl.linkProgram(prog);
+      if(!gl.getProgramParameter(prog,gl.LINK_STATUS)) throw new Error(gl.getProgramInfoLog(prog));
+      gl.useProgram(prog);
+      var buf=gl.createBuffer();gl.bindBuffer(gl.ARRAY_BUFFER,buf);
+      gl.bufferData(gl.ARRAY_BUFFER,new Float32Array([-1,-1,1,-1,-1,1,1,1]),gl.STATIC_DRAW);
+      var loc=gl.getAttribLocation(prog,'p');gl.enableVertexAttribArray(loc);gl.vertexAttribPointer(loc,2,gl.FLOAT,false,0,0);
+      uRes=gl.getUniformLocation(prog,'u_res');uT=gl.getUniformLocation(prog,'u_t');
+      uM=gl.getUniformLocation(prog,'u_m');uMAct=gl.getUniformLocation(prog,'u_mAct');
+      uR=gl.getUniformLocation(prog,'u_r');
+      for(var i=0;i<MAXR;i++) ripples.push(0,0,-1);
+      ok=true;
+    }catch(e){ ok=false; }
+  }
+  if(!ok){ canvas.style.background='radial-gradient(ellipse at 50% 40%,#13424d 0%,#0F3640 55%,#081f27 100%)'; }
+
+  var dpr=Math.min(window.devicePixelRatio||1, 1.5);
+  function resize(){
+    var w=innerWidth,h=innerHeight;
+    canvas.width=Math.round(w*dpr);canvas.height=Math.round(h*dpr);
+    if(ok){gl.viewport(0,0,canvas.width,canvas.height);}
+  }
+  addEventListener('resize',resize);resize();
+
+  function addRipple(nx,ny,t){
+    ripples[rIdx*3]=nx;ripples[rIdx*3+1]=1-ny;ripples[rIdx*3+2]=t;
+    rIdx=(rIdx+1)%MAXR;
+  }
+
+  /* ---------- Wordmark: magnetic letters ---------- */
+  var mark=document.getElementById('mark');
+  var letters=Array.prototype.slice.call(mark.querySelectorAll('g.l'));
+  var lstate=letters.map(function(){return {x:0,y:0,tx:0,ty:0};});
+  var pointerOnPage=false, px=0, py=0;
+
+  function updateLetterTargets(){
+    if(!pointerOnPage||reduce){ lstate.forEach(function(s){s.tx=0;s.ty=0;}); return; }
+    letters.forEach(function(g,i){
+      var r=g.getBoundingClientRect();
+      var cx=r.left+r.width/2, cy=r.top+r.height/2;
+      var dx=px-cx, dy=py-cy; var d=Math.hypot(dx,dy);
+      var R=Math.max(180, innerWidth*.22);
+      var f=Math.max(0,1-d/R); f=f*f;
+      // letters lean gently toward the pointer; the nearest one lifts
+      lstate[i].tx=dx/Math.max(d,1)*f*10;
+      lstate[i].ty=dy/Math.max(d,1)*f*10 - f*6;
+    });
+  }
+
+  var start=performance.now()/1000, last=start, frame=0;
+  function tick(now){
+    now/=1000; var t=now-start;
+    // smooth pointer
+    mouse.x+=(mouse.tx-mouse.x)*.08; mouse.y+=(mouse.ty-mouse.y)*.08;
+    mouse.act+=(mouse.tact-mouse.act)*.06;
+    if(ok){
+      gl.uniform2f(uRes,canvas.width,canvas.height);
+      gl.uniform1f(uT, reduce? 0 : t);
+      gl.uniform2f(uM,mouse.x,1-mouse.y);
+      gl.uniform1f(uMAct,mouse.act);
+      gl.uniform3fv(uR,new Float32Array(ripples));
+      gl.drawArrays(gl.TRIANGLE_STRIP,0,4);
+    }
+    if(frame%2===0) updateLetterTargets();
+    letters.forEach(function(g,i){
+      var s=lstate[i]; s.x+=(s.tx-s.x)*.1; s.y+=(s.ty-s.y)*.1;
+      g.style.transform='translate('+s.x.toFixed(2)+'px,'+s.y.toFixed(2)+'px)';
+    });
+    frame++; requestAnimationFrame(tick);
+  }
+
+  function onMove(e){
+    var x=e.clientX, y=e.clientY;
+    px=x; py=y; pointerOnPage=true;
+    mouse.tx=x/innerWidth; mouse.ty=y/innerHeight; mouse.tact=1;
+  }
+  addEventListener('pointermove',onMove,{passive:true});
+  addEventListener('pointerleave',function(){pointerOnPage=false;mouse.tact=0;});
+  document.addEventListener('mouseleave',function(){pointerOnPage=false;mouse.tact=0;});
+  addEventListener('pointerdown',function(e){
+    onMove(e); addRipple(e.clientX/innerWidth,e.clientY/innerHeight,performance.now()/1000-start);
+  },{passive:true});
+  // occasional ambient drop so the surface is alive even without input
+  function ambient(){
+    if(!reduce && !pointerOnPage) addRipple(.15+Math.random()*.7,.15+Math.random()*.7,performance.now()/1000-start);
+    setTimeout(ambient, 7000+Math.random()*9000);
+  }
+  setTimeout(ambient, 4500);
+
+  /* ---------- Intro ---------- */
+  requestAnimationFrame(function(){
+    letters.forEach(function(g,i){ g.style.transitionDelay=(0.15+i*0.11)+'s'; });
+    mark.classList.add('in');
+    document.getElementById('foot').classList.add('in');
+    // after the intro, hand transform control to the animation loop
+    setTimeout(function(){ letters.forEach(function(g){g.classList.add('live'); g.style.transitionDelay='';}); requestAnimationFrame(tick); }, reduce?50:2200);
+    // a first ripple under the wordmark as it lands
+    setTimeout(function(){ addRipple(.5,.5,performance.now()/1000-start); }, 900);
+  });
+
+  /* ---------- Email: copy on click, mailto as fallback ---------- */
+  var mail=document.getElementById('mail'), copied=document.getElementById('copied'), ct;
+  mail.addEventListener('click',function(e){
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      e.preventDefault();
+      navigator.clipboard.writeText('hello@ellide.com').then(function(){
+        copied.classList.add('show'); clearTimeout(ct); ct=setTimeout(function(){copied.classList.remove('show');},1400);
+      }).catch(function(){ location.href='mailto:hello@ellide.com'; });
+    }
+  });
+})();
+</script>
+</body>
+</html>
